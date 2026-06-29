@@ -4,9 +4,16 @@
 
 ---
 
-| VAT 규모 | TOP3 산업 | 영세율 비중 | 지역 유형 지도 |
-|:---:|:---:|:---:|:---:|
-| ![chart1](charts/chart1_vat_by_region.png) | ![chart2](charts/chart2_top3_industry.png) | ![chart3](charts/chart3_zero_tax_ratio.png) | ![chart4](charts/chart4_korea_map.png) |
+<p align="center">
+  <img src="charts/chart1_vat_by_region.png" width="48%">
+  &nbsp;
+  <img src="charts/chart2_top3_industry.png" width="48%">
+</p>
+<p align="center">
+  <img src="charts/chart3_zero_tax_ratio.png" width="48%">
+  &nbsp;
+  <img src="charts/chart4_korea_map.png" width="48%">
+</p>
 
 ---
 
