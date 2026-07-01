@@ -1,15 +1,20 @@
 import math
+import os
 import pandas as pd
 import mysql.connector
 from pathlib import Path
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).parent.parent
 CSV_PATH = BASE_DIR / 'data' / 'processed' / 'vat_processed.csv'
 
+load_dotenv(BASE_DIR / '.env')
+
 DB_CONFIG = {
-    'host':     'localhost',
-    'user':     'root',
-    'password': '1234',
+    'host':     os.getenv('DB_HOST', 'localhost'),
+    'user':     os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASSWORD'),
+    'port':     int(os.getenv('DB_PORT', 3306)),
 }
 DB_NAME = 'vat_db'
 TABLE   = 'vat_report'
