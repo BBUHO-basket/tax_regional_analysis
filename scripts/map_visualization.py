@@ -10,7 +10,7 @@ plt.rcParams['font.family'] = 'Malgun Gothic'
 plt.rcParams['axes.unicode_minus'] = False
 
 BASE_DIR = Path(__file__).parent.parent
-GEO_PATH = r'C:\Users\USER\AppData\Local\Temp\korea_provinces.json'
+GEO_PATH = BASE_DIR / 'data' / 'raw' / 'korea_provinces.json'
 CSV_PATH = BASE_DIR / 'data' / 'output' / 'region_final_analysis.csv'
 OUT_PATH = BASE_DIR / 'charts' / 'chart4_korea_map.png'
 
