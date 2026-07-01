@@ -5,15 +5,25 @@
   3. 음수 영세율 레코드 추출
   4. 지역 산업 요약 + 영세율 비중 병합 → 최종 분석 테이블
 """
+import os
 import mysql.connector
 import pandas as pd
 from pathlib import Path
+from dotenv import load_dotenv
 
 BASE_DIR   = Path(__file__).parent.parent
 OUTPUT_DIR = BASE_DIR / 'data' / 'output'
 PROC_DIR   = BASE_DIR / 'data' / 'processed'
 
-DB_CONFIG = {'host': 'localhost', 'user': 'root', 'password': '1234', 'database': 'vat_db'}
+load_dotenv(BASE_DIR / '.env')
+
+DB_CONFIG = {
+    'host':     os.getenv('DB_HOST', 'localhost'),
+    'user':     os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASSWORD'),
+    'port':     int(os.getenv('DB_PORT', 3306)),
+    'database': os.getenv('DB_NAME', 'vat_db'),
+}
 
 QUERIES = {
     'q1_data_overview': """
@@ -32,78 +42,63 @@ QUERIES = {
         UNION ALL SELECT '최종세액',       MIN(final_tax),       MAX(final_tax),       ROUND(AVG(final_tax),0),       SUM(final_tax)       FROM vat_report
     """,
     'q2_vat_by_region': """
-        SELECT
-            a.region AS 지역,
-            a.납부세액_합계,
-            a.환급세액_합계,
-            a.최종세액_합계,
-            ROUND(a.최종세액_합계 * 100.0 / (SELECT SUM(final_tax) FROM vat_report), 2) AS 전국대비_비중_PCT,
-            (SELECT COUNT(*) + 1
-             FROM (SELECT region, SUM(final_tax) AS s FROM vat_report GROUP BY region) b
-             WHERE b.s > a.최종세액_합계) AS 순위
-        FROM (
-            SELECT region,
-                   SUM(pay_tax)    AS 납부세액_합계,
-                   SUM(refund_tax) AS 환급세액_합계,
-                   SUM(final_tax)  AS 최종세액_합계
+        WITH base AS (
+            SELECT
+                region,
+                SUM(pay_tax)    AS 납부세액_합계,
+                SUM(refund_tax) AS 환급세액_합계,
+                SUM(final_tax)  AS 최종세액_합계
             FROM vat_report
             GROUP BY region
-        ) a
-        ORDER BY a.최종세액_합계 DESC
+        )
+        SELECT
+            region                                                         AS 지역,
+            납부세액_합계,
+            환급세액_합계,
+            최종세액_합계,
+            ROUND(최종세액_합계 * 100.0 / SUM(최종세액_합계) OVER (), 2) AS 전국대비_비중_PCT,
+            RANK() OVER (ORDER BY 최종세액_합계 DESC)                     AS 순위
+        FROM base
+        ORDER BY 최종세액_합계 DESC
     """,
     'q3_top3_industry_by_region': """
-        SELECT
-            a.region   AS 지역,
-            a.industry AS 업종,
-            a.최종세액,
-            (SELECT COUNT(*) + 1
-             FROM (
-                 SELECT region, industry, SUM(final_tax) AS s
-                 FROM vat_report WHERE final_tax IS NOT NULL
-                 GROUP BY region, industry
-             ) b
-             WHERE b.region = a.region AND b.s > a.최종세액) AS 순위
-        FROM (
-            SELECT region, industry, SUM(final_tax) AS 최종세액
-            FROM vat_report WHERE final_tax IS NOT NULL
+        WITH ranked AS (
+            SELECT
+                region   AS 지역,
+                industry AS 업종,
+                SUM(final_tax) AS 최종세액,
+                RANK() OVER (PARTITION BY region ORDER BY SUM(final_tax) DESC) AS 순위
+            FROM vat_report
+            WHERE final_tax IS NOT NULL
             GROUP BY region, industry
-        ) a
-        WHERE (
-            SELECT COUNT(*)
-            FROM (
-                SELECT region, SUM(final_tax) AS s
-                FROM vat_report WHERE final_tax IS NOT NULL
-                GROUP BY region, industry
-            ) b
-            WHERE b.region = a.region AND b.s > a.최종세액
-        ) < 3
-        ORDER BY a.region, a.최종세액 DESC
+        )
+        SELECT 지역, 업종, 최종세액, 순위
+        FROM ranked
+        WHERE 순위 <= 3
+        ORDER BY 지역, 최종세액 DESC
     """,
     'q4_zero_tax_ratio_by_region': """
+        WITH base AS (
+            SELECT
+                region,
+                SUM(tax_base)      AS 과세표준_합계,
+                SUM(zero_tax_base) AS 영세율과세표준_합계,
+                SUM(tax_base) + SUM(zero_tax_base) AS 총_매출_과세표준,
+                ROUND(
+                    SUM(zero_tax_base) * 100.0
+                    / NULLIF(SUM(tax_base) + SUM(zero_tax_base), 0)
+                , 2) AS 영세율_비중_PCT
+            FROM vat_report
+            GROUP BY region
+        )
         SELECT
-            a.region AS 지역,
-            a.과세표준_합계,
-            a.영세율과세표준_합계,
-            a.과세표준_합계 + a.영세율과세표준_합계 AS 총_매출_과세표준,
-            ROUND(
-                a.영세율과세표준_합계 * 100.0
-                / NULLIF(a.과세표준_합계 + a.영세율과세표준_합계, 0)
-            , 2) AS 영세율_비중_PCT,
-            (SELECT COUNT(*) + 1
-             FROM (
-                 SELECT region,
-                        SUM(zero_tax_base) * 100.0
-                        / NULLIF(SUM(tax_base) + SUM(zero_tax_base), 0) AS pct
-                 FROM vat_report GROUP BY region
-             ) b
-             WHERE b.pct > a.영세율과세표준_합계 * 100.0
-                           / NULLIF(a.과세표준_합계 + a.영세율과세표준_합계, 0)) AS 순위
-        FROM (
-            SELECT region,
-                   SUM(tax_base)      AS 과세표준_합계,
-                   SUM(zero_tax_base) AS 영세율과세표준_합계
-            FROM vat_report GROUP BY region
-        ) a
+            region             AS 지역,
+            과세표준_합계,
+            영세율과세표준_합계,
+            총_매출_과세표준,
+            영세율_비중_PCT,
+            RANK() OVER (ORDER BY 영세율_비중_PCT DESC) AS 순위
+        FROM base
         ORDER BY 영세율_비중_PCT DESC
     """,
 }

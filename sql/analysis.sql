@@ -1,7 +1,7 @@
 -- ============================================================
 -- VAT 분석 쿼리 모음
 -- DB: vat_db  /  TABLE: vat_report
--- 금액 단위: 백만원  /  MySQL 5.6 호환
+-- 금액 단위: 백만원  /  MySQL 8.0 이상 (윈도우 함수, CTE 사용)
 -- ============================================================
 
 USE vat_db;
@@ -56,20 +56,7 @@ FROM vat_report;
 -- Q2. 지역별 VAT 규모는 어떻게 다른가 (final_tax 기준)
 -- ============================================================
 
-SELECT
-    a.region                                                            AS 지역,
-    a.납부세액_합계,
-    a.환급세액_합계,
-    a.최종세액_합계,
-    ROUND(a.최종세액_합계 * 100.0 / (SELECT SUM(final_tax) FROM vat_report), 2)
-                                                                        AS 전국대비_비중_PCT,
-    (SELECT COUNT(*) + 1
-     FROM (
-         SELECT region, SUM(final_tax) AS s
-         FROM vat_report GROUP BY region
-     ) b
-     WHERE b.s > a.최종세액_합계)                                        AS 순위
-FROM (
+WITH base AS (
     SELECT
         region,
         SUM(pay_tax)    AS 납부세액_합계,
@@ -77,43 +64,36 @@ FROM (
         SUM(final_tax)  AS 최종세액_합계
     FROM vat_report
     GROUP BY region
-) a
-ORDER BY a.최종세액_합계 DESC;
+)
+SELECT
+    region                                                         AS 지역,
+    납부세액_합계,
+    환급세액_합계,
+    최종세액_합계,
+    ROUND(최종세액_합계 * 100.0 / SUM(최종세액_합계) OVER (), 2) AS 전국대비_비중_PCT,
+    RANK() OVER (ORDER BY 최종세액_합계 DESC)                     AS 순위
+FROM base
+ORDER BY 최종세액_합계 DESC;
 
 
 -- ============================================================
 -- Q3. 지역별 TOP 3 산업 (final_tax 기준)
 -- ============================================================
 
-SELECT
-    a.region    AS 지역,
-    a.industry  AS 업종,
-    a.최종세액,
-    (SELECT COUNT(*) + 1
-     FROM (
-         SELECT region, industry, SUM(final_tax) AS s
-         FROM vat_report
-         WHERE final_tax IS NOT NULL
-         GROUP BY region, industry
-     ) b
-     WHERE b.region = a.region AND b.s > a.최종세액)  AS 순위
-FROM (
-    SELECT region, industry, SUM(final_tax) AS 최종세액
+WITH ranked AS (
+    SELECT
+        region   AS 지역,
+        industry AS 업종,
+        SUM(final_tax) AS 최종세액,
+        RANK() OVER (PARTITION BY region ORDER BY SUM(final_tax) DESC) AS 순위
     FROM vat_report
     WHERE final_tax IS NOT NULL
     GROUP BY region, industry
-) a
-WHERE (
-    SELECT COUNT(*)
-    FROM (
-        SELECT region, SUM(final_tax) AS s
-        FROM vat_report
-        WHERE final_tax IS NOT NULL
-        GROUP BY region, industry
-    ) b
-    WHERE b.region = a.region AND b.s > a.최종세액
-) < 3
-ORDER BY a.region, a.최종세액 DESC;
+)
+SELECT 지역, 업종, 최종세액, 순위
+FROM ranked
+WHERE 순위 <= 3
+ORDER BY 지역, 최종세액 DESC;
 
 
 -- ============================================================
@@ -121,31 +101,25 @@ ORDER BY a.region, a.최종세액 DESC;
 --     영세율 비중 = zero_tax_base / (tax_base + zero_tax_base) * 100
 -- ============================================================
 
-SELECT
-    a.region                                AS 지역,
-    a.과세표준_합계,
-    a.영세율과세표준_합계,
-    a.과세표준_합계 + a.영세율과세표준_합계 AS 총_매출_과세표준,
-    ROUND(
-        a.영세율과세표준_합계 * 100.0
-        / NULLIF(a.과세표준_합계 + a.영세율과세표준_합계, 0)
-    , 2)                                    AS 영세율_비중_PCT,
-    (SELECT COUNT(*) + 1
-     FROM (
-         SELECT region,
-                SUM(zero_tax_base) * 100.0
-                / NULLIF(SUM(tax_base) + SUM(zero_tax_base), 0) AS pct
-         FROM vat_report GROUP BY region
-     ) b
-     WHERE b.pct > a.영세율과세표준_합계 * 100.0
-                   / NULLIF(a.과세표준_합계 + a.영세율과세표준_합계, 0)
-    )                                       AS 순위
-FROM (
+WITH base AS (
     SELECT
         region,
-        SUM(tax_base)       AS 과세표준_합계,
-        SUM(zero_tax_base)  AS 영세율과세표준_합계
+        SUM(tax_base)      AS 과세표준_합계,
+        SUM(zero_tax_base) AS 영세율과세표준_합계,
+        SUM(tax_base) + SUM(zero_tax_base) AS 총_매출_과세표준,
+        ROUND(
+            SUM(zero_tax_base) * 100.0
+            / NULLIF(SUM(tax_base) + SUM(zero_tax_base), 0)
+        , 2) AS 영세율_비중_PCT
     FROM vat_report
     GROUP BY region
-) a
+)
+SELECT
+    region             AS 지역,
+    과세표준_합계,
+    영세율과세표준_합계,
+    총_매출_과세표준,
+    영세율_비중_PCT,
+    RANK() OVER (ORDER BY 영세율_비중_PCT DESC) AS 순위
+FROM base
 ORDER BY 영세율_비중_PCT DESC;
